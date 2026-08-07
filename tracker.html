@@ -125,11 +125,6 @@
     <span>Last check: <span class="value" id="lastCheck">—</span></span>
   </div>
 
-  <div id="tokenSection">
-    <input type="text" id="tokenInput" placeholder="Paste Steam Web API key here" value="6F6BC93D4B90DAF1835285BF6F4D7C7F"
-      style="width:100%; padding:12px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:14px; margin-bottom:10px; box-sizing:border-box;">
-  </div>
-
   <button class="btn-start" id="toggleBtn">Start Monitoring</button>
 
   <div class="log" id="log"></div>
@@ -161,7 +156,7 @@ const lastCheck = document.getElementById('lastCheck');
 const liveDot = document.getElementById('liveDot');
 const toggleBtn = document.getElementById('toggleBtn');
 const logEl = document.getElementById('log');
-const tokenInput = document.getElementById('tokenInput');
+const STEAM_API_KEY = "6F6BC93D4B90DAF1835285BF6F4D7C7F";
 
 function log(msg) {
   const time = new Date().toLocaleTimeString();
@@ -373,8 +368,7 @@ function handleResult(count, maxPlayers) {
 }
 
 function startMonitoring() {
-  const key = tokenInput.value.trim();
-  if (!key) { log('⚠️ Enter your Steam Web API key first.'); return; }
+  const key = STEAM_API_KEY;
   monitoring = true;
   ensureAudio();
   startKeepAlive();
