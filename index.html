@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hello Player</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: radial-gradient(circle at top, #1c231d 0%, #0b0e0a 100%);
+    color: #e7ede4;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  h1 {
+    font-size: 48px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    user-select: none;
+    margin: 0;
+  }
+  /* The hidden button: styled to look exactly like a plain letter, no visual hint */
+  .secret-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    color: inherit;
+    cursor: default; /* no pointer cursor on hover, so it doesn't give itself away */
+  }
+</style>
+</head>
+<body>
+  <h1>Hello <button class="secret-btn" id="secretP">P</button>layer</h1>
+
+  <script>
+    document.getElementById('secretP').addEventListener('click', () => {
+      window.location.href = 'tracker.html';
+    });
+  </script>
+</body>
+</html>

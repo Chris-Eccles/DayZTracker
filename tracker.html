@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DayZ Server Watcher</title>
+<style>
+  :root {
+    --bg: #0f1410;
+    --panel: #1a211b;
+    --accent: #7fb069;
+    --danger: #c94f4f;
+    --warn: #d98e3a;
+    --text: #e7ede4;
+    --muted: #8a9583;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: radial-gradient(circle at top, #1c231d 0%, #0b0e0a 100%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid #2c352b;
+    border-radius: 16px;
+    padding: 28px;
+    max-width: 440px;
+    width: 100%;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+  }
+  h1 {
+    font-size: 17px;
+    margin: 0 0 2px 0;
+    color: var(--accent);
+    letter-spacing: 0.3px;
+  }
+  .subtitle {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 20px;
+  }
+  .count-display {
+    text-align: center;
+    padding: 24px 0;
+    background: #10150f;
+    border-radius: 12px;
+    margin-bottom: 18px;
+    border: 1px solid #232b21;
+  }
+  .count-number {
+    font-size: 56px;
+    font-weight: 700;
+    line-height: 1;
+    transition: color 0.3s;
+  }
+  .count-label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 6px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .status-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 18px;
+    padding: 0 4px;
+  }
+  .status-row span.value { color: var(--text); }
+  button {
+    width: 100%;
+    padding: 14px;
+    border-radius: 10px;
+    border: none;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-bottom: 10px;
+  }
+  .btn-start { background: var(--accent); color: #0f1410; }
+  .btn-stop { background: var(--danger); color: white; }
+  .log {
+    margin-top: 16px;
+    max-height: 130px;
+    overflow-y: auto;
+    font-size: 12px;
+    color: var(--muted);
+    font-family: 'SF Mono', Consolas, monospace;
+    border-top: 1px solid #232b21;
+    padding-top: 10px;
+  }
+  .log div { padding: 2px 0; }
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+  .dot-live { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .dot-off { background: #4a4a4a; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1><span class="dot dot-off" id="liveDot"></span>DayZ Server Watcher</h1>
+  <div class="subtitle">4223 | EUROPE - DE | 1st Person Only — 5.62.99.49:10500</div>
+
+  <div class="count-display">
+    <div class="count-number" id="countNum">—</div>
+    <div class="count-label">players online</div>
+  </div>
+
+  <div class="status-row">
+    <span>Status: <span class="value" id="statusVal">not monitoring</span></span>
+    <span>Last check: <span class="value" id="lastCheck">—</span></span>
+  </div>
+
+  <div id="tokenSection">
+    <input type="text" id="tokenInput" placeholder="Paste Steam Web API key here" value="6F6BC93D4B90DAF1835285BF6F4D7C7F"
+      style="width:100%; padding:12px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:14px; margin-bottom:10px; box-sizing:border-box;">
+  </div>
+
+  <button class="btn-start" id="toggleBtn">Start Monitoring</button>
+
+  <div class="log" id="log"></div>
+</div>
+
+<script>
+const SERVER_QUERY_ADDR = "5.62.99.49:10501";
+const SERVER_GAME_ADDR = "5.62.99.49:10500";
+const POLL_MS = 30000; // 30 seconds
+
+let monitoring = false;
+let audioCtx = null;
+let lastAlertState = null;
+let lastCount = null;
+let voiceEnabled = true;
+
+function speak(text) {
+  if (!voiceEnabled) return;
+  if (!('speechSynthesis' in window)) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 1.05;
+  window.speechSynthesis.speak(utter);
+}
+
+const countNum = document.getElementById('countNum');
+const statusVal = document.getElementById('statusVal');
+const lastCheck = document.getElementById('lastCheck');
+const liveDot = document.getElementById('liveDot');
+const toggleBtn = document.getElementById('toggleBtn');
+const logEl = document.getElementById('log');
+const tokenInput = document.getElementById('tokenInput');
+
+function log(msg) {
+  const time = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.textContent = `[${time}] ${msg}`;
+  logEl.prepend(div);
+  while (logEl.children.length > 40) logEl.removeChild(logEl.lastChild);
+}
+
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function playLowAlert() {
+  const ctx = ensureAudio();
+  const now = ctx.currentTime;
+  [0, 0.25].forEach(offset => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(1046.5, now + offset);
+    gain.gain.setValueAtTime(0.0001, now + offset);
+    gain.gain.exponentialRampToValueAtTime(0.35, now + offset + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.18);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now + offset);
+    osc.stop(now + offset + 0.2);
+  });
+}
+
+function playHighAlert() {
+  const ctx = ensureAudio();
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueAtTime(392, now);
+  osc.frequency.exponentialRampToValueAtTime(196, now + 0.8);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.3, now + 0.05);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.9);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.9);
+}
+
+function playSameBeep() {
+  const ctx = ensureAudio();
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(600, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.2, now + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.15);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.15);
+}
+
+// Keep-alive tone so the tab isn't throttled/slept while backgrounded during gameplay
+let keepAliveOsc = null, keepAliveGain = null;
+function startKeepAlive() {
+  if (keepAliveOsc) return;
+  const ctx = ensureAudio();
+  keepAliveOsc = ctx.createOscillator();
+  keepAliveGain = ctx.createGain();
+  keepAliveOsc.type = 'sine';
+  keepAliveOsc.frequency.setValueAtTime(20, ctx.currentTime);
+  keepAliveGain.gain.setValueAtTime(0.001, ctx.currentTime);
+  keepAliveOsc.connect(keepAliveGain).connect(ctx.destination);
+  keepAliveOsc.start();
+}
+function stopKeepAlive() {
+  if (keepAliveOsc) {
+    keepAliveOsc.stop();
+    keepAliveOsc.disconnect();
+    keepAliveGain.disconnect();
+    keepAliveOsc = null;
+    keepAliveGain = null;
+  }
+}
+
+// Polling runs in a Web Worker (steadier under background-tab throttling than
+// the main thread) and falls back through public CORS proxies, since Steam's
+// API sends no CORS headers at all and needs one regardless of page origin.
+const workerSource = `
+  let workingSource = null;
+  let pollTimer = null;
+
+  function steamApiUrl(key, queryAddr) {
+    const filter = encodeURIComponent('\\\\appid\\\\221100\\\\addr\\\\' + queryAddr);
+    return 'https://api.steampowered.com/IGameServersService/GetServerList/v1/?key=' + encodeURIComponent(key) + '&filter=' + filter + '&limit=5';
+  }
+
+  const PROXY_SOURCES = [
+    { name: 'allorigins', build: (url) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(url) },
+    { name: 'codetabs', build: (url) => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(url) },
+    { name: 'thingproxy', build: (url) => "https://thingproxy.freeboard.io/fetch/" + url }
+  ];
+
+  async function tryFetchServerInfo(url, label, queryAddr, gameAddr) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(label + ' HTTP ' + res.status);
+    const text = await res.text();
+    let data;
+    try { data = JSON.parse(text); }
+    catch (e) { throw new Error(label + ' returned non-JSON: ' + text.slice(0, 80)); }
+    const servers = data && data.response && data.response.servers;
+    if (!servers || servers.length === 0) {
+      throw new Error(label + ' no matching server in response: ' + text.slice(0, 150));
+    }
+    const match = servers.find(s =>
+      s.addr === queryAddr ||
+      s.addr === gameAddr ||
+      (s.gameport && s.addr && s.addr.split(':')[0] === gameAddr.split(':')[0])
+    ) || servers[0];
+    return { players: match.players, max_players: match.max_players, name: match.name };
+  }
+
+  async function checkServer(key, queryAddr, gameAddr) {
+    try {
+      const directUrl = steamApiUrl(key, queryAddr);
+      let result = null;
+
+      if (workingSource) {
+        const src = PROXY_SOURCES.find(p => p.name === workingSource);
+        try {
+          result = await tryFetchServerInfo(src.build(directUrl), src.name, queryAddr, gameAddr);
+        } catch (err) {
+          postMessage({ type: 'log', message: workingSource + ' failed: ' + err.message });
+          workingSource = null;
+        }
+      }
+
+      if (!result) {
+        for (const src of PROXY_SOURCES) {
+          try {
+            result = await tryFetchServerInfo(src.build(directUrl), src.name, queryAddr, gameAddr);
+            workingSource = src.name;
+            break;
+          } catch (proxyErr) {
+            postMessage({ type: 'log', message: 'Proxy ' + src.name + ' failed: ' + proxyErr.message });
+          }
+        }
+      }
+
+      if (!result) throw new Error('All fetch sources failed.');
+      postMessage({ type: 'result', players: result.players, maxPlayers: result.max_players });
+    } catch (err) {
+      postMessage({ type: 'log', message: '⚠️ Check failed: ' + (err.message || err) });
+      workingSource = null;
+    }
+  }
+
+  onmessage = (e) => {
+    const msg = e.data;
+    if (msg.cmd === 'start') {
+      checkServer(msg.key, msg.queryAddr, msg.gameAddr);
+      pollTimer = setInterval(() => checkServer(msg.key, msg.queryAddr, msg.gameAddr), msg.pollMs);
+    } else if (msg.cmd === 'stop') {
+      clearInterval(pollTimer);
+    }
+  };
+`;
+
+let worker = null;
+
+function createWorker() {
+  const blob = new Blob([workerSource], { type: 'application/javascript' });
+  worker = new Worker(URL.createObjectURL(blob));
+  worker.onmessage = (e) => {
+    const msg = e.data;
+    if (msg.type === 'log') {
+      log(msg.message);
+    } else if (msg.type === 'result') {
+      handleResult(msg.players, msg.maxPlayers);
+    }
+  };
+}
+
+function handleResult(count, maxPlayers) {
+  countNum.textContent = count;
+  countNum.style.color = count === 1 ? '#d98e3a' : (count > 10 ? '#c94f4f' : '#e7ede4');
+  lastCheck.textContent = new Date().toLocaleTimeString();
+  log(`Online — ${count}${maxPlayers ? '/' + maxPlayers : ''} players`);
+
+  if (lastCount === null) {
+    speak(`Player count is ${count}.`);
+  } else if (count !== lastCount) {
+    speak(`Players ${count > lastCount ? 'up' : 'down'} to ${count}.`);
+  } else {
+    playSameBeep();
+  }
+  lastCount = count;
+
+  if (count === 1) {
+    if (lastAlertState !== 'low') { playLowAlert(); log('🔔 ALERT: player count = 1'); }
+    lastAlertState = 'low';
+  } else if (count > 10) {
+    if (lastAlertState !== 'high') { playHighAlert(); log('🚨 ALERT: player count > 10'); }
+    lastAlertState = 'high';
+  } else {
+    lastAlertState = null;
+  }
+}
+
+function startMonitoring() {
+  const key = tokenInput.value.trim();
+  if (!key) { log('⚠️ Enter your Steam Web API key first.'); return; }
+  monitoring = true;
+  ensureAudio();
+  startKeepAlive();
+  toggleBtn.textContent = 'Stop Monitoring';
+  toggleBtn.className = 'btn-stop';
+  statusVal.textContent = 'monitoring (every 30s)';
+  liveDot.className = 'dot dot-live';
+  log('Started monitoring.');
+  if (!worker) createWorker();
+  worker.postMessage({ cmd: 'start', key, queryAddr: SERVER_QUERY_ADDR, gameAddr: SERVER_GAME_ADDR, pollMs: POLL_MS });
+}
+
+function stopMonitoring() {
+  monitoring = false;
+  stopKeepAlive();
+  if (worker) worker.postMessage({ cmd: 'stop' });
+  lastCount = null;
+  toggleBtn.textContent = 'Start Monitoring';
+  toggleBtn.className = 'btn-start';
+  statusVal.textContent = 'not monitoring';
+  liveDot.className = 'dot dot-off';
+  log('Stopped monitoring.');
+}
+
+toggleBtn.addEventListener('click', () => { monitoring ? stopMonitoring() : startMonitoring(); });
+</script>
+</body>
+</html>
