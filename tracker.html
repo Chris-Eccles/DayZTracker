@@ -131,7 +131,6 @@
 </div>
 
 <script>
-const SERVER_QUERY_ADDR = "5.62.99.49:10501";
 const SERVER_GAME_ADDR = "5.62.99.49:10500";
 const POLL_MS = 30000; // 30 seconds
 
@@ -156,7 +155,6 @@ const lastCheck = document.getElementById('lastCheck');
 const liveDot = document.getElementById('liveDot');
 const toggleBtn = document.getElementById('toggleBtn');
 const logEl = document.getElementById('log');
-const STEAM_API_KEY = "6F6BC93D4B90DAF1835285BF6F4D7C7F";
 
 function log(msg) {
   const time = new Date().toLocaleTimeString();
@@ -244,82 +242,40 @@ function stopKeepAlive() {
 }
 
 // Polling runs in a Web Worker (steadier under background-tab throttling than
-// the main thread) and falls back through public CORS proxies, since Steam's
-// API sends no CORS headers at all and needs one regardless of page origin.
+// the main thread). It calls our own /api/steam serverless function (same
+// origin as this page), which does the actual Steam API call server-side —
+// no CORS issues, no reliance on flaky third-party proxies, and the Steam key
+// never has to live in this client-side code.
 const workerSource = `
-  let workingSource = null;
   let pollTimer = null;
 
-  function steamApiUrl(key, queryAddr) {
-    const filter = encodeURIComponent('\\\\appid\\\\221100\\\\addr\\\\' + queryAddr);
-    return 'https://api.steampowered.com/IGameServersService/GetServerList/v1/?key=' + encodeURIComponent(key) + '&filter=' + filter + '&limit=5';
-  }
-
-  const PROXY_SOURCES = [
-    { name: 'allorigins', build: (url) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(url) },
-    { name: 'codetabs', build: (url) => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(url) },
-    { name: 'thingproxy', build: (url) => "https://thingproxy.freeboard.io/fetch/" + url }
-  ];
-
-  async function tryFetchServerInfo(url, label, queryAddr, gameAddr) {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(label + ' HTTP ' + res.status);
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); }
-    catch (e) { throw new Error(label + ' returned non-JSON: ' + text.slice(0, 80)); }
-    const servers = data && data.response && data.response.servers;
-    if (!servers || servers.length === 0) {
-      throw new Error(label + ' no matching server in response: ' + text.slice(0, 150));
-    }
-    const match = servers.find(s =>
-      s.addr === queryAddr ||
-      s.addr === gameAddr ||
-      (s.gameport && s.addr && s.addr.split(':')[0] === gameAddr.split(':')[0])
-    ) || servers[0];
-    return { players: match.players, max_players: match.max_players, name: match.name };
-  }
-
-  async function checkServer(key, queryAddr, gameAddr) {
+  async function checkServer(gameAddr) {
     try {
-      const directUrl = steamApiUrl(key, queryAddr);
-      let result = null;
-
-      if (workingSource) {
-        const src = PROXY_SOURCES.find(p => p.name === workingSource);
-        try {
-          result = await tryFetchServerInfo(src.build(directUrl), src.name, queryAddr, gameAddr);
-        } catch (err) {
-          postMessage({ type: 'log', message: workingSource + ' failed: ' + err.message });
-          workingSource = null;
-        }
+      const res = await fetch('/api/steam');
+      if (!res.ok) {
+        const errBody = await res.text();
+        throw new Error('HTTP ' + res.status + ': ' + errBody.slice(0, 150));
       }
-
-      if (!result) {
-        for (const src of PROXY_SOURCES) {
-          try {
-            result = await tryFetchServerInfo(src.build(directUrl), src.name, queryAddr, gameAddr);
-            workingSource = src.name;
-            break;
-          } catch (proxyErr) {
-            postMessage({ type: 'log', message: 'Proxy ' + src.name + ' failed: ' + proxyErr.message });
-          }
-        }
+      const data = await res.json();
+      const servers = data && data.response && data.response.servers;
+      if (!servers || servers.length === 0) {
+        throw new Error('No matching server in response.');
       }
-
-      if (!result) throw new Error('All fetch sources failed.');
-      postMessage({ type: 'result', players: result.players, maxPlayers: result.max_players });
+      const match = servers.find(s =>
+        s.addr === gameAddr ||
+        (s.gameport && s.addr && s.addr.split(':')[0] === gameAddr.split(':')[0])
+      ) || servers[0];
+      postMessage({ type: 'result', players: match.players, maxPlayers: match.max_players });
     } catch (err) {
       postMessage({ type: 'log', message: '⚠️ Check failed: ' + (err.message || err) });
-      workingSource = null;
     }
   }
 
   onmessage = (e) => {
     const msg = e.data;
     if (msg.cmd === 'start') {
-      checkServer(msg.key, msg.queryAddr, msg.gameAddr);
-      pollTimer = setInterval(() => checkServer(msg.key, msg.queryAddr, msg.gameAddr), msg.pollMs);
+      checkServer(msg.gameAddr);
+      pollTimer = setInterval(() => checkServer(msg.gameAddr), msg.pollMs);
     } else if (msg.cmd === 'stop') {
       clearInterval(pollTimer);
     }
@@ -368,17 +324,16 @@ function handleResult(count, maxPlayers) {
 }
 
 function startMonitoring() {
-  const key = STEAM_API_KEY;
   monitoring = true;
   ensureAudio();
   startKeepAlive();
   toggleBtn.textContent = 'Stop Monitoring';
   toggleBtn.className = 'btn-stop';
-  statusVal.textContent = 'monitoring (every 30s)';
+  statusVal.textContent = 'monitoring';
   liveDot.className = 'dot dot-live';
   log('Started monitoring.');
   if (!worker) createWorker();
-  worker.postMessage({ cmd: 'start', key, queryAddr: SERVER_QUERY_ADDR, gameAddr: SERVER_GAME_ADDR, pollMs: POLL_MS });
+  worker.postMessage({ cmd: 'start', gameAddr: SERVER_GAME_ADDR, pollMs: POLL_MS });
 }
 
 function stopMonitoring() {
