@@ -249,9 +249,9 @@ function stopKeepAlive() {
 const workerSource = `
   let pollTimer = null;
 
-  async function checkServer(gameAddr) {
+  async function checkServer(gameAddr, apiOrigin) {
     try {
-      const res = await fetch('/api/steam');
+      const res = await fetch(apiOrigin + '/api/steam');
       if (!res.ok) {
         const errBody = await res.text();
         throw new Error('HTTP ' + res.status + ': ' + errBody.slice(0, 150));
@@ -274,8 +274,8 @@ const workerSource = `
   onmessage = (e) => {
     const msg = e.data;
     if (msg.cmd === 'start') {
-      checkServer(msg.gameAddr);
-      pollTimer = setInterval(() => checkServer(msg.gameAddr), msg.pollMs);
+      checkServer(msg.gameAddr, msg.apiOrigin);
+      pollTimer = setInterval(() => checkServer(msg.gameAddr, msg.apiOrigin), msg.pollMs);
     } else if (msg.cmd === 'stop') {
       clearInterval(pollTimer);
     }
@@ -333,7 +333,7 @@ function startMonitoring() {
   liveDot.className = 'dot dot-live';
   log('Started monitoring.');
   if (!worker) createWorker();
-  worker.postMessage({ cmd: 'start', gameAddr: SERVER_GAME_ADDR, pollMs: POLL_MS });
+  worker.postMessage({ cmd: 'start', gameAddr: SERVER_GAME_ADDR, pollMs: POLL_MS, apiOrigin: window.location.origin });
 }
 
 function stopMonitoring() {
