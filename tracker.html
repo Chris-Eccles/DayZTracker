@@ -132,7 +132,7 @@
 
 <script>
 const SERVER_GAME_ADDR = "5.62.99.49:10500";
-const POLL_MS = 30000; // 30 seconds
+const POLL_MS = 15000; // 15 seconds — direct query, no caching lag or proxy rate limits to worry about
 
 let monitoring = false;
 let audioCtx = null;
@@ -251,21 +251,16 @@ const workerSource = `
 
   async function checkServer(gameAddr, apiOrigin) {
     try {
-      const res = await fetch(apiOrigin + '/api/steam');
+      const res = await fetch(apiOrigin + '/api/a2s');
       if (!res.ok) {
         const errBody = await res.text();
         throw new Error('HTTP ' + res.status + ': ' + errBody.slice(0, 150));
       }
       const data = await res.json();
-      const servers = data && data.response && data.response.servers;
-      if (!servers || servers.length === 0) {
-        throw new Error('No matching server in response.');
+      if (typeof data.players !== 'number') {
+        throw new Error('Unexpected response shape.');
       }
-      const match = servers.find(s =>
-        s.addr === gameAddr ||
-        (s.gameport && s.addr && s.addr.split(':')[0] === gameAddr.split(':')[0])
-      ) || servers[0];
-      postMessage({ type: 'result', players: match.players, maxPlayers: match.max_players });
+      postMessage({ type: 'result', players: data.players, maxPlayers: data.maxPlayers });
     } catch (err) {
       postMessage({ type: 'log', message: '⚠️ Check failed: ' + (err.message || err) });
     }
