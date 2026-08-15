@@ -225,26 +225,34 @@ let favorites = loadFavorites();
 function renderFavorites() {
   favList.innerHTML = '';
   favorites.forEach((fav) => {
-    const chip = document.createElement('button');
-    chip.textContent = (fav.label || fav.addr) + ' ✕';
-    chip.style.cssText = 'width:auto; margin:0; padding:6px 10px; font-size:12px; font-weight:500; background:#232b21; color:#e7ede4; border:1px solid #3a453a; border-radius:20px; cursor:pointer;';
-    chip.title = fav.addr;
-    chip.addEventListener('click', (e) => {
-      // Clicking the ✕ area (last ~14px) removes; clicking elsewhere selects
-      const rect = chip.getBoundingClientRect();
-      const clickedRemove = (e.clientX - rect.left) > rect.width - 20;
-      if (clickedRemove) {
-        favorites = favorites.filter(f => f.addr !== fav.addr);
-        saveFavorites(favorites);
-        renderFavorites();
-      } else {
-        currentServerAddr = fav.addr;
-        saveServerAddr(fav.addr);
-        updateServerLabel();
-        log(`⭐ Switched to favorite: ${fav.label || fav.addr}`);
-        if (monitoring) { stopMonitoring(); startMonitoring(); }
-      }
+    const chip = document.createElement('div');
+    chip.style.cssText = 'display:flex; align-items:center; gap:6px; background:#232b21; border:1px solid #3a453a; border-radius:20px; padding:4px 4px 4px 12px;';
+
+    const selectBtn = document.createElement('button');
+    selectBtn.textContent = fav.label || fav.addr;
+    selectBtn.title = fav.addr;
+    selectBtn.style.cssText = 'width:auto; margin:0; padding:2px 0; font-size:12px; font-weight:500; background:transparent; color:#e7ede4; border:none; cursor:pointer;';
+    selectBtn.addEventListener('click', () => {
+      currentServerAddr = fav.addr;
+      saveServerAddr(fav.addr);
+      updateServerLabel();
+      log(`⭐ Switched to favorite: ${fav.label || fav.addr}`);
+      if (monitoring) { stopMonitoring(); startMonitoring(); }
     });
+
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = '✕';
+    removeBtn.title = 'Remove favorite';
+    removeBtn.style.cssText = 'width:auto; margin:0; padding:2px 6px; font-size:11px; background:transparent; color:#8a9583; border:none; cursor:pointer; border-radius:50%;';
+    removeBtn.addEventListener('click', () => {
+      favorites = favorites.filter(f => f.addr !== fav.addr);
+      saveFavorites(favorites);
+      renderFavorites();
+      refreshFavStar();
+    });
+
+    chip.appendChild(selectBtn);
+    chip.appendChild(removeBtn);
     favList.appendChild(chip);
   });
 }
