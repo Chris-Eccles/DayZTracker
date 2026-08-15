@@ -1,5 +1,3 @@
-
-A2s · JS
 const dgram = require('dgram');
  
 const DEFAULT_IP = '5.62.99.49';
