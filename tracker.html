@@ -115,11 +115,13 @@
   <h1><span class="dot dot-off" id="liveDot"></span>DayZ Server Watcher</h1>
   <div class="subtitle" id="serverLabel">Loading server info…</div>
 
-  <div style="display:flex; gap:8px; margin-bottom:14px;">
+  <div style="display:flex; gap:8px; margin-bottom:8px;">
     <input type="text" id="serverInput" placeholder="IP:QueryPort (e.g. 5.62.99.49:10501)"
       style="flex:1; padding:10px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:13px; box-sizing:border-box;">
     <button id="serverBtn" style="width:auto; padding:10px 16px; margin:0; background:#3a453a; color:#e7ede4;">Set</button>
+    <button id="favBtn" title="Save current server as favorite" style="width:auto; padding:10px 14px; margin:0; background:#3a453a; color:#e7ede4;">☆</button>
   </div>
+  <div id="favList" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;"></div>
 
   <div class="count-display">
     <div class="count-number" id="countNum">—</div>
@@ -189,6 +191,8 @@ const logEl = document.getElementById('log');
 const serverLabel = document.getElementById('serverLabel');
 const serverInput = document.getElementById('serverInput');
 const serverBtn = document.getElementById('serverBtn');
+const favBtn = document.getElementById('favBtn');
+const favList = document.getElementById('favList');
 
 function log(msg) {
   const time = new Date().toLocaleTimeString();
@@ -200,7 +204,70 @@ function log(msg) {
 
 function updateServerLabel() {
   serverLabel.textContent = currentServerAddr;
+  refreshFavStar();
 }
+
+/* ---------- Favorites ---------- */
+function loadFavorites() {
+  try {
+    const saved = localStorage.getItem('dayz_favorite_servers');
+    if (saved) return JSON.parse(saved);
+  } catch (e) {}
+  return [];
+}
+
+function saveFavorites(list) {
+  try { localStorage.setItem('dayz_favorite_servers', JSON.stringify(list)); } catch (e) {}
+}
+
+let favorites = loadFavorites();
+
+function renderFavorites() {
+  favList.innerHTML = '';
+  favorites.forEach((fav) => {
+    const chip = document.createElement('button');
+    chip.textContent = (fav.label || fav.addr) + ' ✕';
+    chip.style.cssText = 'width:auto; margin:0; padding:6px 10px; font-size:12px; font-weight:500; background:#232b21; color:#e7ede4; border:1px solid #3a453a; border-radius:20px; cursor:pointer;';
+    chip.title = fav.addr;
+    chip.addEventListener('click', (e) => {
+      // Clicking the ✕ area (last ~14px) removes; clicking elsewhere selects
+      const rect = chip.getBoundingClientRect();
+      const clickedRemove = (e.clientX - rect.left) > rect.width - 20;
+      if (clickedRemove) {
+        favorites = favorites.filter(f => f.addr !== fav.addr);
+        saveFavorites(favorites);
+        renderFavorites();
+      } else {
+        currentServerAddr = fav.addr;
+        saveServerAddr(fav.addr);
+        updateServerLabel();
+        log(`⭐ Switched to favorite: ${fav.label || fav.addr}`);
+        if (monitoring) { stopMonitoring(); startMonitoring(); }
+      }
+    });
+    favList.appendChild(chip);
+  });
+}
+
+function refreshFavStar() {
+  const isFav = favorites.some(f => f.addr === currentServerAddr);
+  favBtn.textContent = isFav ? '★' : '☆';
+}
+
+favBtn.addEventListener('click', () => {
+  const isFav = favorites.some(f => f.addr === currentServerAddr);
+  if (isFav) {
+    favorites = favorites.filter(f => f.addr !== currentServerAddr);
+    log('Removed from favorites.');
+  } else {
+    const label = prompt('Optional name for this server (leave blank to just use the IP):', '');
+    favorites.push({ addr: currentServerAddr, label: label ? label.trim() : '' });
+    log('⭐ Added to favorites.');
+  }
+  saveFavorites(favorites);
+  refreshFavStar();
+  renderFavorites();
+});
 
 serverBtn.addEventListener('click', () => {
   const val = serverInput.value.trim();
@@ -482,6 +549,7 @@ function stopClockPolling() {
 }
 
 updateServerLabel();
+renderFavorites();
 renderClock();
 setInterval(renderClock, 1000); // smooth ticking between real syncs
 
