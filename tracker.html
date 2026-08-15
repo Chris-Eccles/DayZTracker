@@ -113,7 +113,13 @@
 <body>
 <div class="card">
   <h1><span class="dot dot-off" id="liveDot"></span>DayZ Server Watcher</h1>
-  <div class="subtitle">4223 | EUROPE - DE | 1st Person Only — 5.62.99.49:10500</div>
+  <div class="subtitle" id="serverLabel">Loading server info…</div>
+
+  <div style="display:flex; gap:8px; margin-bottom:14px;">
+    <input type="text" id="serverInput" placeholder="IP:QueryPort (e.g. 5.62.99.49:10501)"
+      style="flex:1; padding:10px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:13px; box-sizing:border-box;">
+    <button id="serverBtn" style="width:auto; padding:10px 16px; margin:0; background:#3a453a; color:#e7ede4;">Set</button>
+  </div>
 
   <div class="count-display">
     <div class="count-number" id="countNum">—</div>
@@ -125,14 +131,39 @@
     <span>Last check: <span class="value" id="lastCheck">—</span></span>
   </div>
 
+  <div class="count-display" id="clockDisplay" style="padding:16px 0;">
+    <div class="count-number" id="clockNum" style="font-size:36px;">—</div>
+    <div class="count-label" id="clockPhase">in-game time</div>
+  </div>
+
   <button class="btn-start" id="toggleBtn">Start Monitoring</button>
 
   <div class="log" id="log"></div>
 </div>
 
 <script>
-const SERVER_GAME_ADDR = "5.62.99.49:10500";
-const POLL_MS = 15000; // 15 seconds — direct query, no caching lag or proxy rate limits to worry about
+const DEFAULT_SERVER_ADDR = "5.62.99.49:10501"; // ip:queryPort
+
+function loadServerAddr() {
+  try {
+    const saved = localStorage.getItem('dayz_server_addr');
+    if (saved) return saved;
+  } catch (e) {}
+  return DEFAULT_SERVER_ADDR;
+}
+
+function saveServerAddr(addr) {
+  try { localStorage.setItem('dayz_server_addr', addr); } catch (e) {}
+}
+
+function parseServerAddr(addr) {
+  const [ip, portStr] = addr.split(':');
+  return { ip: ip, port: parseInt(portStr, 10) };
+}
+
+let currentServerAddr = loadServerAddr();
+const POLL_MS = 15000;       // player count — direct query, no caching lag or proxy limits
+const CLOCK_POLL_MS = 60000; // in-game clock — heavier request (full server list), so less frequent
 
 let monitoring = false;
 let audioCtx = null;
@@ -155,6 +186,9 @@ const lastCheck = document.getElementById('lastCheck');
 const liveDot = document.getElementById('liveDot');
 const toggleBtn = document.getElementById('toggleBtn');
 const logEl = document.getElementById('log');
+const serverLabel = document.getElementById('serverLabel');
+const serverInput = document.getElementById('serverInput');
+const serverBtn = document.getElementById('serverBtn');
 
 function log(msg) {
   const time = new Date().toLocaleTimeString();
@@ -163,6 +197,27 @@ function log(msg) {
   logEl.prepend(div);
   while (logEl.children.length > 40) logEl.removeChild(logEl.lastChild);
 }
+
+function updateServerLabel() {
+  serverLabel.textContent = currentServerAddr;
+}
+
+serverBtn.addEventListener('click', () => {
+  const val = serverInput.value.trim();
+  if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5}$/.test(val)) {
+    log('⚠️ Enter server as IP:QueryPort, e.g. 5.62.99.49:10501');
+    return;
+  }
+  currentServerAddr = val;
+  saveServerAddr(val);
+  serverInput.value = '';
+  updateServerLabel();
+  log(`🔄 Server set to ${val}. Restart monitoring to apply.`);
+  if (monitoring) {
+    stopMonitoring();
+    startMonitoring();
+  }
+});
 
 function ensureAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -227,16 +282,15 @@ function stopKeepAlive() {
 }
 
 // Polling runs in a Web Worker (steadier under background-tab throttling than
-// the main thread). It calls our own /api/steam serverless function (same
-// origin as this page), which does the actual Steam API call server-side —
-// no CORS issues, no reliance on flaky third-party proxies, and the Steam key
-// never has to live in this client-side code.
+// the main thread). It calls our own /api/a2s serverless function (same
+// origin as this page), which does the actual A2S query server-side.
 const workerSource = `
   let pollTimer = null;
 
-  async function checkServer(gameAddr, apiOrigin) {
+  async function checkServer(ip, port, apiOrigin) {
     try {
-      const res = await fetch(apiOrigin + '/api/a2s');
+      const url = apiOrigin + '/api/a2s?ip=' + encodeURIComponent(ip) + '&port=' + encodeURIComponent(port);
+      const res = await fetch(url);
       if (!res.ok) {
         const errBody = await res.text();
         throw new Error('HTTP ' + res.status + ': ' + errBody.slice(0, 150));
@@ -254,8 +308,8 @@ const workerSource = `
   onmessage = (e) => {
     const msg = e.data;
     if (msg.cmd === 'start') {
-      checkServer(msg.gameAddr, msg.apiOrigin);
-      pollTimer = setInterval(() => checkServer(msg.gameAddr, msg.apiOrigin), msg.pollMs);
+      checkServer(msg.ip, msg.port, msg.apiOrigin);
+      pollTimer = setInterval(() => checkServer(msg.ip, msg.port, msg.apiOrigin), msg.pollMs);
     } else if (msg.cmd === 'stop') {
       clearInterval(pollTimer);
     }
@@ -281,12 +335,13 @@ function handleResult(count, maxPlayers) {
   countNum.textContent = count;
   countNum.style.color = count === 1 ? '#d98e3a' : (count > 10 ? '#c94f4f' : '#e7ede4');
   lastCheck.textContent = new Date().toLocaleTimeString();
-  log(`Online — ${count}${maxPlayers ? '/' + maxPlayers : ''} players`);
 
   if (lastCount === null) {
     speak(`Player count is ${count}.`);
+    log(`Online — ${count}${maxPlayers ? '/' + maxPlayers : ''} players`);
   } else if (count !== lastCount) {
     speak(`Players ${count > lastCount ? 'up' : 'down'} to ${count}.`);
+    log(`${count > lastCount ? '↑' : '↓'} Now ${count}${maxPlayers ? '/' + maxPlayers : ''} players`);
   }
   lastCount = count;
 
@@ -311,7 +366,9 @@ function startMonitoring() {
   liveDot.className = 'dot dot-live';
   log('Started monitoring.');
   if (!worker) createWorker();
-  worker.postMessage({ cmd: 'start', gameAddr: SERVER_GAME_ADDR, pollMs: POLL_MS, apiOrigin: window.location.origin });
+  const { ip, port } = parseServerAddr(currentServerAddr);
+  worker.postMessage({ cmd: 'start', ip, port, pollMs: POLL_MS, apiOrigin: window.location.origin });
+  startClockPolling();
 }
 
 function stopMonitoring() {
@@ -324,7 +381,109 @@ function stopMonitoring() {
   statusVal.textContent = 'not monitoring';
   liveDot.className = 'dot dot-off';
   log('Stopped monitoring.');
+  stopClockPolling();
 }
+
+/* ---------- In-game clock (real, from DZSA's public server list) ---------- */
+// We fetch the true live "time" + "timeAcceleration" from Bohemia's server
+// data (surfaced via dayzsalauncher.com's public API) every CLOCK_POLL_MS,
+// then tick smoothly between fetches using that real multiplier — this is
+// self-correcting every minute, not a guess.
+const clockNum = document.getElementById('clockNum');
+const clockPhase = document.getElementById('clockPhase');
+
+let anchorRealMs = null;
+let anchorGameMinutes = null;
+let currentAccel = null; // in-game hours per real hour, from live data
+let clockPollTimer = null;
+let lastRenderedGameMinutes = null; // used to detect crossing announcement times
+
+const ANNOUNCE_TARGETS = [
+  { minute: 0,    text: 'It is midnight in-game.' },
+  { minute: 480,  text: 'It is 8 AM in-game.' },
+  { minute: 720,  text: 'It is midday in-game.' },
+  { minute: 1140, text: 'It is 7 PM in-game.' }
+];
+
+function crossedTarget(prev, curr, target) {
+  if (curr >= prev) {
+    return target > prev && target <= curr;
+  }
+  // wrapped past midnight within this tick
+  return target > prev || target <= curr;
+}
+
+function checkAnnouncements(prevMinutes, currMinutes) {
+  for (const t of ANNOUNCE_TARGETS) {
+    if (crossedTarget(prevMinutes, currMinutes, t.minute)) {
+      speak(t.text);
+      log('🕐 ' + t.text);
+    }
+  }
+}
+
+function formatGameTime(minutes) {
+  const h = Math.floor(minutes / 60) % 24;
+  const m = Math.floor(minutes % 60);
+  return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+}
+
+function renderClock() {
+  if (anchorRealMs === null || currentAccel === null) {
+    clockNum.textContent = '—';
+    clockPhase.textContent = 'in-game time';
+    return;
+  }
+  const elapsedSeconds = (Date.now() - anchorRealMs) / 1000;
+  const minutesElapsed = elapsedSeconds * currentAccel / 60;
+  const currentGameMinutes = ((anchorGameMinutes + minutesElapsed) % 1440 + 1440) % 1440;
+
+  if (lastRenderedGameMinutes !== null) {
+    checkAnnouncements(lastRenderedGameMinutes, currentGameMinutes);
+  }
+  lastRenderedGameMinutes = currentGameMinutes;
+
+  clockNum.textContent = formatGameTime(currentGameMinutes);
+  const hour = Math.floor(currentGameMinutes / 60);
+  const isNight = hour >= 20 || hour < 6; // rough cosmetic guess for the icon only
+  clockPhase.textContent = (isNight ? '🌙 ' : '☀️ ') + 'in-game time (live)';
+}
+
+async function fetchRealClock() {
+  try {
+    const { ip, port } = parseServerAddr(currentServerAddr);
+    const res = await fetch(`${window.location.origin}/api/dzsa-time?ip=${encodeURIComponent(ip)}&port=${encodeURIComponent(port)}`);
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error('HTTP ' + res.status + ': ' + body.slice(0, 150));
+    }
+    const data = await res.json();
+    if (!data.time || typeof data.timeAcceleration !== 'number') {
+      throw new Error('Unexpected response shape.');
+    }
+    const [h, m] = data.time.split(':').map(Number);
+    anchorRealMs = Date.now();
+    anchorGameMinutes = h * 60 + m;
+    currentAccel = data.timeAcceleration;
+    lastRenderedGameMinutes = null; // avoid a false announcement trigger from the resync jump
+    renderClock();
+  } catch (err) {
+    log('⚠️ Clock sync failed: ' + (err.message || err));
+  }
+}
+
+function startClockPolling() {
+  fetchRealClock();
+  clockPollTimer = setInterval(fetchRealClock, CLOCK_POLL_MS);
+}
+
+function stopClockPolling() {
+  clearInterval(clockPollTimer);
+}
+
+updateServerLabel();
+renderClock();
+setInterval(renderClock, 1000); // smooth ticking between real syncs
 
 toggleBtn.addEventListener('click', () => { monitoring ? stopMonitoring() : startMonitoring(); });
 </script>
