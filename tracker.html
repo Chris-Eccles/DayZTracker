@@ -155,8 +155,8 @@
         style="width:100%; padding:8px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:13px; box-sizing:border-box;">
     </div>
     <div>
-      <label style="font-size:11px; color:#8a9583;">Night speed (x)</label>
-      <input type="text" id="nightSpeedInput" placeholder="e.g. 16.8"
+      <label style="font-size:11px; color:#8a9583;">Night x (of day speed)</label>
+      <input type="text" id="nightSpeedInput" placeholder="e.g. 4.2"
         style="width:100%; padding:8px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:13px; box-sizing:border-box;">
     </div>
   </div>
@@ -606,22 +606,22 @@ function populateInputsFromConfig(cfg) {
   nightStartInput.value = formatGameTime(cfg.nightStartMin);
   nightEndInput.value = formatGameTime(cfg.nightEndMin);
   daySpeedInput.value = cfg.daySpeed;
-  nightSpeedInput.value = cfg.nightSpeed;
+  nightSpeedInput.value = cfg.nightRaw;
 }
 
 syncClockBtn.addEventListener('click', () => {
   const nightStartMin = parseHHMM(nightStartInput.value);
   const nightEndMin = parseHHMM(nightEndInput.value);
   const daySpeed = parseFloat(daySpeedInput.value);
-  const nightSpeed = parseFloat(nightSpeedInput.value);
+  const nightRaw = parseFloat(nightSpeedInput.value);
   const currentMin = parseHHMM(currentTimeInput.value);
 
   if (nightStartMin === null || nightEndMin === null) {
     log('⚠️ Enter night start/end as HH:MM.');
     return;
   }
-  if (isNaN(daySpeed) || isNaN(nightSpeed) || daySpeed <= 0 || nightSpeed <= 0) {
-    log('⚠️ Enter valid day/night speed multipliers.');
+  if (isNaN(daySpeed) || isNaN(nightRaw) || daySpeed <= 0 || nightRaw <= 0) {
+    log('⚠️ Enter valid day speed and night multiplier.');
     return;
   }
   if (currentMin === null) {
@@ -629,13 +629,14 @@ syncClockBtn.addEventListener('click', () => {
     return;
   }
 
-  clockConfig = { nightStartMin, nightEndMin, daySpeed, nightSpeed };
+  const nightSpeed = daySpeed * nightRaw; // night multiplier applies on top of day speed
+  clockConfig = { nightStartMin, nightEndMin, daySpeed, nightRaw, nightSpeed };
   saveClockConfig(clockConfig);
   anchorRealMs = Date.now();
   anchorGameMinutes = currentMin;
   lastRenderedGameMinutes = null;
   currentTimeInput.value = '';
-  log(`🕐 Clock synced to in-game ${formatGameTime(currentMin)} (day ${daySpeed}x, night ${nightSpeed}x).`);
+  log(`🕐 Clock synced to in-game ${formatGameTime(currentMin)} (day ${daySpeed}x, night ${nightRaw}x → ${nightSpeed.toFixed(1)}x effective).`);
   renderClock();
 });
 
