@@ -138,6 +138,34 @@
     <div class="count-label" id="clockPhase">in-game time</div>
   </div>
 
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:8px;">
+    <div>
+      <label style="font-size:11px; color:#8a9583;">Night starts</label>
+      <input type="text" id="nightStartInput" placeholder="HH:MM"
+        style="width:100%; padding:8px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:13px; box-sizing:border-box;">
+    </div>
+    <div>
+      <label style="font-size:11px; color:#8a9583;">Night ends</label>
+      <input type="text" id="nightEndInput" placeholder="HH:MM"
+        style="width:100%; padding:8px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:13px; box-sizing:border-box;">
+    </div>
+    <div>
+      <label style="font-size:11px; color:#8a9583;">Day speed (x)</label>
+      <input type="text" id="daySpeedInput" placeholder="e.g. 4"
+        style="width:100%; padding:8px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:13px; box-sizing:border-box;">
+    </div>
+    <div>
+      <label style="font-size:11px; color:#8a9583;">Night speed (x)</label>
+      <input type="text" id="nightSpeedInput" placeholder="e.g. 16.8"
+        style="width:100%; padding:8px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:13px; box-sizing:border-box;">
+    </div>
+  </div>
+  <div style="display:flex; gap:8px; margin-bottom:18px;">
+    <input type="text" id="currentTimeInput" placeholder="Current in-game time HH:MM"
+      style="flex:1; padding:10px; border-radius:8px; border:1px solid #3a453a; background:#10150f; color:#e7ede4; font-size:13px; box-sizing:border-box;">
+    <button id="syncClockBtn" style="width:auto; padding:10px 16px; margin:0; background:#3a453a; color:#e7ede4;">Sync</button>
+  </div>
+
   <button class="btn-start" id="toggleBtn">Start Monitoring</button>
 
   <div class="log" id="log"></div>
@@ -165,7 +193,6 @@ function parseServerAddr(addr) {
 
 let currentServerAddr = loadServerAddr();
 const POLL_MS = 15000;       // player count — direct query, no caching lag or proxy limits
-const CLOCK_POLL_MS = 60000; // in-game clock — heavier request (full server list), so less frequent
 
 let monitoring = false;
 let audioCtx = null;
@@ -443,7 +470,6 @@ function startMonitoring() {
   if (!worker) createWorker();
   const { ip, port } = parseServerAddr(currentServerAddr);
   worker.postMessage({ cmd: 'start', ip, port, pollMs: POLL_MS, apiOrigin: window.location.origin });
-  startClockPolling();
 }
 
 function stopMonitoring() {
@@ -456,22 +482,22 @@ function stopMonitoring() {
   statusVal.textContent = 'not monitoring';
   liveDot.className = 'dot dot-off';
   log('Stopped monitoring.');
-  stopClockPolling();
 }
 
-/* ---------- In-game clock (real, from DZSA's public server list) ---------- */
-// We fetch the true live "time" + "timeAcceleration" from Bohemia's server
-// data (surfaced via dayzsalauncher.com's public API) every CLOCK_POLL_MS,
-// then tick smoothly between fetches using that real multiplier — this is
-// self-correcting every minute, not a guess.
+/* ---------- In-game clock (simulated, fully configurable) ---------- */
 const clockNum = document.getElementById('clockNum');
 const clockPhase = document.getElementById('clockPhase');
+const nightStartInput = document.getElementById('nightStartInput');
+const nightEndInput = document.getElementById('nightEndInput');
+const daySpeedInput = document.getElementById('daySpeedInput');
+const nightSpeedInput = document.getElementById('nightSpeedInput');
+const currentTimeInput = document.getElementById('currentTimeInput');
+const syncClockBtn = document.getElementById('syncClockBtn');
 
+let clockConfig = null;      // { nightStartMin, nightEndMin, daySpeed, nightSpeed }
 let anchorRealMs = null;
 let anchorGameMinutes = null;
-let currentAccel = null; // in-game hours per real hour, from live data
-let clockPollTimer = null;
-let lastRenderedGameMinutes = null; // used to detect crossing announcement times
+let lastRenderedGameMinutes = null;
 
 const ANNOUNCE_TARGETS = [
   { minute: 0,    text: 'It is midnight in-game.' },
@@ -480,12 +506,66 @@ const ANNOUNCE_TARGETS = [
   { minute: 1140, text: 'It is 7 PM in-game.' }
 ];
 
-function crossedTarget(prev, curr, target) {
-  if (curr >= prev) {
-    return target > prev && target <= curr;
+function parseHHMM(str) {
+  const m = str.trim().match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10), min = parseInt(m[2], 10);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+function loadClockConfig() {
+  try {
+    const saved = localStorage.getItem('dayz_clock_config');
+    if (saved) return JSON.parse(saved);
+  } catch (e) {}
+  return null;
+}
+
+function saveClockConfig(cfg) {
+  try { localStorage.setItem('dayz_clock_config', JSON.stringify(cfg)); } catch (e) {}
+}
+
+function isNightMinute(min, cfg) {
+  const { nightStartMin, nightEndMin } = cfg;
+  if (nightStartMin > nightEndMin) {
+    return min >= nightStartMin || min < nightEndMin;
   }
-  // wrapped past midnight within this tick
-  return target > prev || target <= curr;
+  return min >= nightStartMin && min < nightEndMin;
+}
+
+function minutesUntilBoundary(currentMin, night, cfg) {
+  const boundary = night ? cfg.nightEndMin : cfg.nightStartMin;
+  let diff = boundary - currentMin;
+  if (diff <= 0) diff += 1440;
+  return diff;
+}
+
+// Advances simulated in-game minutes forward by realSeconds, switching rate
+// whenever it crosses into day/night, using the user's configured values.
+function advanceGameMinutes(gameMinutes, realSecondsRemaining, cfg) {
+  let minutes = gameMinutes;
+  while (realSecondsRemaining > 0.0001) {
+    const night = isNightMinute(minutes % 1440, cfg);
+    const rate = night ? cfg.nightSpeed : cfg.daySpeed;
+    const gameMinPerRealSec = rate / 60;
+    const minutesToBoundary = minutesUntilBoundary(minutes % 1440, night, cfg);
+    const realSecondsToBoundary = minutesToBoundary / gameMinPerRealSec;
+
+    if (realSecondsToBoundary >= realSecondsRemaining) {
+      minutes += realSecondsRemaining * gameMinPerRealSec;
+      realSecondsRemaining = 0;
+    } else {
+      minutes += minutesToBoundary;
+      realSecondsRemaining -= realSecondsToBoundary;
+    }
+  }
+  return ((minutes % 1440) + 1440) % 1440;
+}
+
+function crossedTarget(prev, curr, target) {
+  if (curr >= prev) return target > prev && target <= curr;
+  return target > prev || target <= curr; // wrapped past midnight
 }
 
 function checkAnnouncements(prevMinutes, currMinutes) {
@@ -504,14 +584,13 @@ function formatGameTime(minutes) {
 }
 
 function renderClock() {
-  if (anchorRealMs === null || currentAccel === null) {
+  if (anchorRealMs === null || !clockConfig) {
     clockNum.textContent = '—';
     clockPhase.textContent = 'in-game time';
     return;
   }
   const elapsedSeconds = (Date.now() - anchorRealMs) / 1000;
-  const minutesElapsed = elapsedSeconds * currentAccel / 60;
-  const currentGameMinutes = ((anchorGameMinutes + minutesElapsed) % 1440 + 1440) % 1440;
+  const currentGameMinutes = advanceGameMinutes(anchorGameMinutes, elapsedSeconds, clockConfig);
 
   if (lastRenderedGameMinutes !== null) {
     checkAnnouncements(lastRenderedGameMinutes, currentGameMinutes);
@@ -519,47 +598,59 @@ function renderClock() {
   lastRenderedGameMinutes = currentGameMinutes;
 
   clockNum.textContent = formatGameTime(currentGameMinutes);
-  const hour = Math.floor(currentGameMinutes / 60);
-  const isNight = hour >= 20 || hour < 6; // rough cosmetic guess for the icon only
-  clockPhase.textContent = (isNight ? '🌙 ' : '☀️ ') + 'in-game time (live)';
+  const night = isNightMinute(Math.floor(currentGameMinutes), clockConfig);
+  clockPhase.textContent = (night ? '🌙 ' : '☀️ ') + 'in-game time (est.)';
 }
 
-async function fetchRealClock() {
-  try {
-    const { ip, port } = parseServerAddr(currentServerAddr);
-    const res = await fetch(`${window.location.origin}/api/dzsa-time?ip=${encodeURIComponent(ip)}&port=${encodeURIComponent(port)}`);
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error('HTTP ' + res.status + ': ' + body.slice(0, 150));
-    }
-    const data = await res.json();
-    if (!data.time || typeof data.timeAcceleration !== 'number') {
-      throw new Error('Unexpected response shape.');
-    }
-    const [h, m] = data.time.split(':').map(Number);
-    anchorRealMs = Date.now();
-    anchorGameMinutes = h * 60 + m;
-    currentAccel = data.timeAcceleration;
-    lastRenderedGameMinutes = null; // avoid a false announcement trigger from the resync jump
-    renderClock();
-  } catch (err) {
-    log('⚠️ Clock sync failed: ' + (err.message || err));
+function populateInputsFromConfig(cfg) {
+  nightStartInput.value = formatGameTime(cfg.nightStartMin);
+  nightEndInput.value = formatGameTime(cfg.nightEndMin);
+  daySpeedInput.value = cfg.daySpeed;
+  nightSpeedInput.value = cfg.nightSpeed;
+}
+
+syncClockBtn.addEventListener('click', () => {
+  const nightStartMin = parseHHMM(nightStartInput.value);
+  const nightEndMin = parseHHMM(nightEndInput.value);
+  const daySpeed = parseFloat(daySpeedInput.value);
+  const nightSpeed = parseFloat(nightSpeedInput.value);
+  const currentMin = parseHHMM(currentTimeInput.value);
+
+  if (nightStartMin === null || nightEndMin === null) {
+    log('⚠️ Enter night start/end as HH:MM.');
+    return;
   }
-}
+  if (isNaN(daySpeed) || isNaN(nightSpeed) || daySpeed <= 0 || nightSpeed <= 0) {
+    log('⚠️ Enter valid day/night speed multipliers.');
+    return;
+  }
+  if (currentMin === null) {
+    log('⚠️ Enter the current in-game time as HH:MM to sync.');
+    return;
+  }
 
-function startClockPolling() {
-  fetchRealClock();
-  clockPollTimer = setInterval(fetchRealClock, CLOCK_POLL_MS);
-}
+  clockConfig = { nightStartMin, nightEndMin, daySpeed, nightSpeed };
+  saveClockConfig(clockConfig);
+  anchorRealMs = Date.now();
+  anchorGameMinutes = currentMin;
+  lastRenderedGameMinutes = null;
+  currentTimeInput.value = '';
+  log(`🕐 Clock synced to in-game ${formatGameTime(currentMin)} (day ${daySpeed}x, night ${nightSpeed}x).`);
+  renderClock();
+});
 
-function stopClockPolling() {
-  clearInterval(clockPollTimer);
+// Restore saved config on load (still needs a manual time sync to start ticking,
+// since the real elapsed in-game time can't be known until you tell us)
+const savedClockConfig = loadClockConfig();
+if (savedClockConfig) {
+  clockConfig = savedClockConfig;
+  populateInputsFromConfig(savedClockConfig);
 }
 
 updateServerLabel();
 renderFavorites();
 renderClock();
-setInterval(renderClock, 1000); // smooth ticking between real syncs
+setInterval(renderClock, 1000);
 
 toggleBtn.addEventListener('click', () => { monitoring ? stopMonitoring() : startMonitoring(); });
 </script>
