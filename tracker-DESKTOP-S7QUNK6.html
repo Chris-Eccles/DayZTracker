@@ -125,25 +125,11 @@
     <span>Last check: <span class="value" id="lastCheck">—</span></span>
   </div>
 
-  <div id="restartRow" style="display:none; font-size:13px; color:var(--warn); margin-bottom:14px; text-align:center; padding:8px; background:#10150f; border-radius:8px;"></div>
-
-  <div id="playerListSection" style="display:none; margin-bottom:14px;">
-    <div class="count-label" style="margin-bottom:8px;">who's online</div>
-    <div id="playerListBody" style="font-size:13px; color:var(--text); max-height:120px; overflow-y:auto;"></div>
-  </div>
-
-  <div style="background:#10150f; border-radius:12px; border:1px solid #232b21; padding:12px; margin-bottom:14px;">
-    <div class="count-label" style="margin-bottom:8px;">players — last 7 days</div>
-    <canvas id="historyChart" height="140"></canvas>
-  </div>
-
   <button class="btn-start" id="toggleBtn">Start Monitoring</button>
 
   <div class="log" id="log"></div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-adapter-date-fns/3.0.0/chartjs-adapter-date-fns.bundle.min.js"></script>
 <script>
 const POLL_MS = 15000; // 15 seconds — direct A2S query, no caching lag or proxy limits
 
@@ -324,7 +310,6 @@ function startMonitoring() {
   log('Started monitoring.');
   if (!worker) createWorker();
   worker.postMessage({ cmd: 'start', pollMs: POLL_MS, apiOrigin: window.location.origin });
-  startExtraPolling();
 }
 
 function stopMonitoring() {
@@ -337,136 +322,9 @@ function stopMonitoring() {
   statusVal.textContent = 'not monitoring';
   liveDot.className = 'dot dot-off';
   log('Stopped monitoring.');
-  stopExtraPolling();
 }
 
 toggleBtn.addEventListener('click', () => { monitoring ? stopMonitoring() : startMonitoring(); });
-
-/* ---------- 7-day history chart ---------- */
-let historyChart = null;
-
-async function loadHistoryChart() {
-  try {
-    const res = await fetch(`${window.location.origin}/api/history`);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const rows = await res.json();
-    if (!Array.isArray(rows)) throw new Error('Unexpected response shape.');
-
-    const labels = rows.map(r => new Date(r.recorded_at));
-    const values = rows.map(r => r.players);
-
-    const ctx = document.getElementById('historyChart').getContext('2d');
-    if (historyChart) historyChart.destroy();
-    historyChart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels,
-        datasets: [{
-          data: values,
-          borderColor: '#7fb069',
-          backgroundColor: 'rgba(127,176,105,0.15)',
-          fill: true,
-          tension: 0.2,
-          pointRadius: 0,
-          borderWidth: 2
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: {
-            type: 'time',
-            time: { unit: 'day' },
-            ticks: { color: '#8a9583', font: { size: 10 } },
-            grid: { color: '#232b21' }
-          },
-          y: {
-            beginAtZero: true,
-            ticks: { color: '#8a9583', font: { size: 10 } },
-            grid: { color: '#232b21' }
-          }
-        }
-      }
-    });
-
-    if (rows.length === 0) {
-      log('ℹ️ No history yet — data will appear once the logging cron starts running.');
-    }
-  } catch (err) {
-    log('⚠️ History chart failed to load: ' + (err.message || err));
-  }
-}
-
-loadHistoryChart();
-setInterval(loadHistoryChart, 5 * 60 * 1000); // refresh chart every 5 min while page is open
-
-/* ---------- Extra info: restart countdown + player list ---------- */
-const EXTRA_POLL_MS = 30000; // heavier double-query, poll less often than player count
-const restartRow = document.getElementById('restartRow');
-const playerListSection = document.getElementById('playerListSection');
-const playerListBody = document.getElementById('playerListBody');
-let extraPollTimer = null;
-let loggedRulesUnsupported = false;
-let loggedPlayersUnsupported = false;
-
-function formatDuration(seconds) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
-
-async function fetchExtraInfo() {
-  try {
-    const res = await fetch(`${window.location.origin}/api/a2s-extra`);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-
-    // Restart countdown, if the server exposes it via A2S_RULES
-    if (data.rules && data.rules.timeLeft) {
-      const mins = parseInt(data.rules.timeLeft, 10);
-      if (!isNaN(mins)) {
-        restartRow.style.display = 'block';
-        restartRow.textContent = `⏱ Restart in ~${formatDuration(mins * 60)}`;
-      }
-    } else if (data.rulesError && !loggedRulesUnsupported) {
-      log('ℹ️ Restart countdown not available: ' + data.rulesError);
-      loggedRulesUnsupported = true;
-      restartRow.style.display = 'none';
-    }
-
-    // Player list, if the server responds to A2S_PLAYER
-    if (data.players && Array.isArray(data.players)) {
-      if (data.players.length > 0) {
-        playerListSection.style.display = 'block';
-        playerListBody.innerHTML = data.players
-          .sort((a, b) => b.durationSeconds - a.durationSeconds)
-          .map(p => `<div>${p.name || '(unnamed)'} — ${formatDuration(p.durationSeconds)}</div>`)
-          .join('');
-      } else {
-        playerListSection.style.display = 'none';
-      }
-    } else if (data.playersError && !loggedPlayersUnsupported) {
-      log('ℹ️ Player list not available: ' + data.playersError);
-      loggedPlayersUnsupported = true;
-      playerListSection.style.display = 'none';
-    }
-  } catch (err) {
-    // Silent — this is a bonus feature, don't spam the log on repeated failures
-  }
-}
-
-function startExtraPolling() {
-  fetchExtraInfo();
-  extraPollTimer = setInterval(fetchExtraInfo, EXTRA_POLL_MS);
-}
-
-function stopExtraPolling() {
-  clearInterval(extraPollTimer);
-  restartRow.style.display = 'none';
-  playerListSection.style.display = 'none';
-}
 </script>
 </body>
 </html>
