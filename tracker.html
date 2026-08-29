@@ -324,7 +324,10 @@ function startMonitoring() {
   log('Started monitoring.');
   if (!worker) createWorker();
   worker.postMessage({ cmd: 'start', pollMs: POLL_MS, apiOrigin: window.location.origin });
+<<<<<<< HEAD
   startExtraPolling();
+=======
+>>>>>>> 5767333ef402bd9df1ef9a8eb78a475eeff3f1df
 }
 
 function stopMonitoring() {
